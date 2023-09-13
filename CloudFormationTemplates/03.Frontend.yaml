@@ -1,0 +1,228 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template for test VPC, subnets, security group, EC2 instance, ELB, and Internet Gateway.
+
+Parameters:
+  VpcCIDR:
+    Description: CIDR block for the VPC
+    Type: String
+    Default: 10.2.0.0/16
+
+  Subnet1CIDR:
+    Description: CIDR block for Subnet 1
+    Type: String
+    Default: 10.2.1.0/28
+
+  Subnet2CIDR:
+    Description: CIDR block for Subnet 2
+    Type: String
+    Default: 10.2.2.0/28
+
+  BackendAnimeGatewayURL:
+    Description: export object name
+    Type: String
+    Default: BackendAnimeGatewayURL
+
+  # BackendAnimeGatewayURL:
+  #   Type: String
+  #   Default: !ImportValue backend-AnimeGatewayURL
+
+  BackendStackName:
+    Description: Name of the backend Stack with all the resources
+    Type: String
+    Default: backend
+
+  # AnimeGatewayURL:
+  #   Description: HTTP URL of Anime API Gateway
+  #   Type: String
+  #   Default: !Import
+
+Resources:
+  TestVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      Tags:
+        -
+          Key: Name
+          Value: test-vpc
+
+  TestSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref TestVPC
+      CidrBlock: !Ref Subnet1CIDR
+      AvailabilityZone: us-east-1a
+      Tags:
+        -
+          Key: Name
+          Value: test-subnet-1
+
+  TestSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref TestVPC
+      CidrBlock: !Ref Subnet2CIDR
+      AvailabilityZone: us-east-1b
+      Tags:
+        -
+          Key: Name
+          Value: test-subnet-2
+
+  TestInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        -
+          Key: Name
+          Value: test-igw
+
+  TestVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref TestVPC
+      InternetGatewayId: !Ref TestInternetGateway
+
+  TestRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref TestVPC
+
+  TestRoute:
+    Type: AWS::EC2::Route
+    DependsOn: TestVPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref TestRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref TestInternetGateway
+  
+  RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref TestRouteTable
+      SubnetId: !Ref TestSubnet1
+
+  TestSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      Tags:
+        -
+          Key: Name
+          Value: test-sg
+      GroupDescription: Allow inbound ports 22, 3000, 80, 443 from anywhere
+      VpcId: !Ref TestVPC
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+
+  TestInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      Tags:
+        -
+          Key: Name
+          Value: test-ec2
+      ImageId:q
+      InstanceType: t2.micro      
+      KeyName: springboot1  
+      UserData:
+        Fn::Base64: !Sub 
+          - |
+            #!/bin/bash -xe
+            api_url=${API_URL}
+            sudo yum install -y nodejs
+            mkdir /cloud/
+            cd /cloud
+            wget https://animesage.s3.amazonaws.com/animesage.zip
+            unzip animesage.zip
+            echo "REACT_APP_API=$api_url" > .env
+            npm install
+            npm start
+          - API_URL:
+              Fn::ImportValue:
+                !Ref BackendAnimeGatewayURL
+
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          GroupSet: 
+            - !Ref TestSecurityGroup
+          SubnetId: 
+            Ref: "TestSubnet1"
+
+  TestTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Tags:
+        -
+          Key: Name
+          Value: test-tg
+      VpcId: !Ref TestVPC
+      Protocol: HTTP
+      Port: 3000
+      TargetType: instance
+      Targets:
+        - Id: !Ref TestInstance
+          Port: 3000
+
+  TestLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Tags:
+        -
+          Key: Name
+          Value: test-elb
+      Name: test-elb
+      Subnets:
+        - !Ref TestSubnet1
+        - !Ref TestSubnet2
+      SecurityGroups:
+        - !Ref TestSecurityGroup
+
+  TestListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref TestLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TestTargetGroup
+
+Outputs:
+  VpcId:
+    Description: VPC ID
+    Value: !Ref TestVPC
+
+  Subnet1Id:
+    Description: Subnet 1 ID
+    Value: !Ref TestSubnet1
+
+  Subnet2Id:
+    Description: Subnet 2 ID
+    Value: !Ref TestSubnet2
+
+  SecurityGroupId:
+    Description: Security Group ID
+    Value: !Ref TestSecurityGroup
+
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref TestInstance
+
+  LoadBalancerDNS:
+    Description: Load Balancer DNS name
+    Value: !GetAtt TestLoadBalancer.DNSName

@@ -1,0 +1,499 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFormation Template for Lambda functions, HTTP API Gateway, SQS, and SNS
+
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Description: Prefix for naming resources (e.g., test-, prod-, dev-)
+    Default: test-
+  dynamoDBTableName:
+    Type: String
+    Description: DynamoDb Table Name
+    Default: animedb
+
+Resources:
+
+#-------------------------Lambda Function Creation------------------------------#
+
+  # Lambda function 1: test-animefunction
+  AnimeFunctionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}animefunction'
+      Runtime: nodejs18.x
+      Handler: index.handler
+      Role: arn:aws:iam::767410676527:role/LabRole
+      Code:
+        S3Bucket: animesage
+        S3Key: test-animefunction.zip
+      Environment:
+        Variables:
+          dynamoDB: !Sub '${ResourcePrefix}${dynamoDBTableName}'
+      Tags:
+        - Key: subject
+          Value: cloudcomputing
+
+  # Lambda function 2: test-filteranime
+  FilterAnimeLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}filteranime'
+      Runtime: nodejs18.x
+      Handler: index.handler
+      Role: arn:aws:iam::767410676527:role/LabRole
+      Code:
+        S3Bucket: animesage
+        S3Key: test-filteranime.zip
+      Environment:
+        Variables:
+          dynamoDB: !Sub '${ResourcePrefix}${dynamoDBTableName}'
+      Tags:
+        - Key: subject
+          Value: cloudcomputing
+
+  # Lambda function 3: test-transformdata
+  TransformDataLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}transformdata'
+      Runtime: python3.9
+      Handler: lambda_function.lambda_handler
+      Role: arn:aws:iam::767410676527:role/LabRole
+      Timeout: 900
+      Code:
+        S3Bucket: animesage
+        S3Key: test-transformdata.zip
+      Environment:
+        Variables:
+          dynamoDB: !Sub '${ResourcePrefix}${dynamoDBTableName}'
+      Tags:
+        - Key: subject
+          Value: cloudcomputing
+
+  # Lambda function 4: test-changeepisodetonumber
+  ChangeLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}changeepisodetonumber'
+      Runtime: python3.9
+      Handler: lambda_function.lambda_handler
+      Role: arn:aws:iam::767410676527:role/LabRole
+      Timeout: 900
+      Code:
+        S3Bucket: animesage
+        S3Key: test-changeepisodetonumber.zip
+      Environment:
+        Variables:
+          dynamoDB: !Sub '${ResourcePrefix}${dynamoDBTableName}'
+      Tags:
+        - Key: subject
+          Value: cloudcomputing
+
+#-------------------------SQS SNS Creation------------------------------#
+  AnimeSQS:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Join [ "", [!Ref ResourcePrefix, "animeSQS"]]
+
+  AnimeInfoSNS:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Join [ "", [!Ref ResourcePrefix, "sendanimeinfoSNS"]]
+      Subscription:
+        - Protocol: sqs
+          Endpoint:
+            Fn::GetAtt:
+              - AnimeSQS
+              - Arn
+
+  AnimeSQSPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref AnimeSQS
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSNSPublish
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt AnimeSQS.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref AnimeInfoSNS
+
+              
+  AnimeNotificationSNS:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Join [ "", [!Ref ResourcePrefix, "sendanimenotificationSNS"]]
+      Subscription:
+        - Protocol: email
+          Endpoint: tapan.patel@dal.ca
+
+  # Rest of the SQS and SNS resources follow...
+
+#-------------------------Lambda for SNS SQS Creation------------------------------#
+
+  # Lambda function 5: test-publishanimetosns
+  PublishLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}publishanimetosns'
+      Runtime: python3.9
+      Handler: lambda_function.lambda_handler
+      Role: arn:aws:iam::767410676527:role/LabRole
+      Code:
+        S3Bucket: animesage
+        S3Key: test-publishanimetosns.zip
+      Environment:
+        Variables:
+          sns_topic_arn: !Ref AnimeInfoSNS
+      Tags:
+        - Key: subject
+          Value: cloudcomputing
+
+  # Lambda function 6: test-sendanimeemail
+  SendEmailLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}sendanimeemail'
+      Runtime: python3.9
+      Handler: lambda_function.lambda_handler
+      Role: arn:aws:iam::767410676527:role/LabRole
+      Code:
+        S3Bucket: animesage
+        S3Key: test-sendanimeemail.zip
+      Environment:
+        Variables:
+          sns_topic_arn: !Ref AnimeInfoSNS
+          queue_url: !Sub "${AnimeSQS}"
+      Tags:
+        - Key: subject
+          Value: cloudcomputing
+
+
+
+  AnimeLambdaEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt AnimeSQS.Arn
+      FunctionName: !Ref SendEmailLambda
+#-------------------------API Gateway Creation------------------------------#
+
+  # API Gateway
+  AnimeGateway:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${ResourcePrefix}agw'
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - '*'
+        AllowHeaders: 
+          - '*'
+
+  # Invoke Lambda function 1: test-animefunction
+  APIInvokeAnimeFunctionLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AnimeFunctionLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${AnimeGateway}/*/*/*
+
+  AnimeGatewayGetMethodIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AnimeGateway
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri: !Join
+        - ''
+        - - 'arn:'
+          - !Ref 'AWS::Partition'
+          - ':apigateway:'
+          - !Ref 'AWS::Region'
+          - ':lambda:path/2015-03-31/functions/'
+          - !GetAtt AnimeFunctionLambda.Arn
+          - /invocations
+
+  AnimeGatewayGetMethodRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AnimeGateway
+      RouteKey: 'GET /genres'
+      Target: !Join 
+        - /
+        - - integrations
+          - !Ref AnimeGatewayGetMethodIntegration
+
+  # Invoke Lambda function 2: test-filteranime
+  APIInvokeFilterAnimeLambdaLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FilterAnimeLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${AnimeGateway}/*/*/*
+ 
+  FilterAnimeGatewayPostMethodIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AnimeGateway
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri: !Join
+        - ''
+        - - 'arn:'
+          - !Ref 'AWS::Partition'
+          - ':apigateway:'
+          - !Ref 'AWS::Region'
+          - ':lambda:path/2015-03-31/functions/'
+          - !GetAtt FilterAnimeLambda.Arn
+          - /invocations
+          
+  FilterAnimeGatewayPostMethodRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AnimeGateway
+      RouteKey: 'POST /filteranime'
+      Target: !Join 
+        - /
+        - - integrations
+          - !Ref FilterAnimeGatewayPostMethodIntegration
+
+  # Invoke Lambda function 3: test-transformdata
+  APIInvokeTransformDataLambdaLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TransformDataLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${AnimeGateway}/*/*/*
+
+  TransformDataGatewayGetMethodIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AnimeGateway
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri: !Join
+        - ''
+        - - 'arn:'
+          - !Ref 'AWS::Partition'
+          - ':apigateway:'
+          - !Ref 'AWS::Region'
+          - ':lambda:path/2015-03-31/functions/'
+          - !GetAtt TransformDataLambda.Arn
+          - /invocations
+          
+  TransformLambdaGatewayGetMethodRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AnimeGateway
+      RouteKey: 'GET /transform'
+      Target: !Join 
+        - /
+        - - integrations
+          - !Ref TransformDataGatewayGetMethodIntegration
+
+  # Invoke Lambda function 4: test-changeepisodetonumber
+  APIInvokeChangeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ChangeLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${AnimeGateway}/*/*/*
+
+  ChangeDataGatewayGetMethodIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AnimeGateway
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri: !Join
+        - ''
+        - - 'arn:'
+          - !Ref 'AWS::Partition'
+          - ':apigateway:'
+          - !Ref 'AWS::Region'
+          - ':lambda:path/2015-03-31/functions/'
+          - !GetAtt ChangeLambda.Arn
+          - /invocations
+          
+  ChangeLambdaGatewayGetMethodRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AnimeGateway
+      RouteKey: 'GET /change'
+      Target: !Join 
+        - /
+        - - integrations
+          - !Ref ChangeDataGatewayGetMethodIntegration
+
+  # Invoke Lambda function 5: test-publishanimetosns
+  APIInvokePublishLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PublishLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${AnimeGateway}/*/*/*
+
+  PublishGatewayGetMethodIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AnimeGateway
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri: !Join
+        - ''
+        - - 'arn:'
+          - !Ref 'AWS::Partition'
+          - ':apigateway:'
+          - !Ref 'AWS::Region'
+          - ':lambda:path/2015-03-31/functions/'
+          - !GetAtt PublishLambda.Arn
+          - /invocations
+          
+  PublishLambdaGatewayGetMethodRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AnimeGateway
+      RouteKey: 'POST /sendanimesns'
+      Target: !Join 
+        - /
+        - - integrations
+          - !Ref PublishGatewayGetMethodIntegration
+
+
+  # Invoke Lambda function 6: test-sendanimeemail
+  APIInvokeSendEmailLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SendEmailLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${AnimeGateway}/*/*/*
+
+  SendEmailLambdaGetMethodIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref AnimeGateway
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri: !Join
+        - ''
+        - - 'arn:'
+          - !Ref 'AWS::Partition'
+          - ':apigateway:'
+          - !Ref 'AWS::Region'
+          - ':lambda:path/2015-03-31/functions/'
+          - !GetAtt SendEmailLambda.Arn
+          - /invocations
+          
+  SendEmailLambdaGatewayGetMethodRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref AnimeGateway
+      RouteKey: 'POST /sendanimeemail'
+      Target: !Join 
+        - /
+        - - integrations
+          - !Ref SendEmailLambdaGetMethodIntegration
+
+ 
+
+  AnimeGatewayStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref AnimeGateway
+      StageName: '$default'
+      AutoDeploy: true
+
+Outputs:
+  AnimeFunctionArn:
+    Description: ARN of the Anime Function Lambda
+    Value:
+      Fn::GetAtt:
+        - AnimeFunctionLambda
+        - Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-AnimeFunctionArn"
+
+  FilterAnimeArn:
+    Description: ARN of the Filter Anime Lambda
+    Value:
+      Fn::GetAtt:
+        - FilterAnimeLambda
+        - Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-FilterAnimeArn"
+
+  TransformDataArn:
+    Description: ARN of the Transform Data Lambda
+    Value:
+      Fn::GetAtt:
+        - TransformDataLambda
+        - Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-TransformDataArn"
+
+  ChangeLambdaArn:
+    Description: ARN of the Change Lambda
+    Value:
+      Fn::GetAtt:
+        - ChangeLambda
+        - Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ChangeLambdaArn"
+
+  PublishLambdaArn:
+    Description: ARN of the Publish Lambda
+    Value:
+      Fn::GetAtt:
+        - PublishLambda
+        - Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-PublishLambdaArn"
+
+  SendEmailLambdaArn:
+    Description: ARN of the Send Email Lambda
+    Value:
+      Fn::GetAtt:
+        - SendEmailLambda
+        - Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-SendEmailLambdaArn"
+
+  AnimeGatewayURL:
+    Description: URL of the Anime Gateway
+    Value:
+      Fn::Sub: "https://${AnimeGateway}.execute-api.${AWS::Region}.amazonaws.com"
+    Export:
+      Name: !Sub "${AWS::StackName}AnimeGatewayURL"
+  AnimeSQSQueueARN:
+    Description: ARN of the Anime SQS Queue
+    Value: !GetAtt AnimeSQS.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-AnimeSQSQueueARN"
+
+  AnimeInfoSNSTopicARN:
+    Description: ARN of the Anime Info SNS Topic
+    Value: !Ref AnimeInfoSNS
+    Export:
+      Name: !Sub "${AWS::StackName}-AnimeInfoSNSTopicARN"
+
+  AnimeNotificationSNSTopicARN:
+    Description: ARN of the Anime Notification SNS Topic
+    Value: !Ref AnimeNotificationSNS
+    Export:
+      Name: !Sub "${AWS::StackName}-AnimeNotificationSNSTopicARN"
+

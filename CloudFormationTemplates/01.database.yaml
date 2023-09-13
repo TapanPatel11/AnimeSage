@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create a DynamoDB table and import data from CSV file in S3
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: Name of the S3 bucket where the CSV file is located
+    Default: animesage
+  S3ObjectKey:
+    Type: String
+    Description: Object key of the CSV file in the S3 bucket
+    Default: dbfolder/01690728503891-1364daf6/data/
+  TableName:
+    Type: String
+    Description: Name of the DynamoDB table
+    Default: test-animedb
+  PartitionKeyName:
+    Type: String
+    Description: Name of the partition key column in the DynamoDB table
+    Default: uid
+
+Resources:
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      AttributeDefinitions:
+        - AttributeName: !Ref PartitionKeyName
+          AttributeType: S
+      KeySchema:
+        - AttributeName: !Ref PartitionKeyName
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: False
+      ImportSourceSpecification:
+        InputFormat: DYNAMODB_JSON
+        InputCompressionType: GZIP
+        S3BucketSource:
+          S3Bucket: !Ref S3BucketName
+          S3KeyPrefix: !Ref S3ObjectKey
+
+Outputs:
+  DynamoDBTableName:
+    Value: !Ref DynamoDBTable
+    Description: Name of the created DynamoDB table
